@@ -20,14 +20,20 @@ fn main() {
     };
 
     let t = Instant::now();
-    let index = match ts_index::index_file(video_path) {
+    let mode = if args.iter().any(|a| a == "--sparse") { "extraits" } else if args.iter().any(|a| a == "--full") { "complète" } else { "auto" };
+    let result = match mode {
+        "extraits" => ts_index::index_sparse(video_path),
+        "complète" => ts_index::index_file_full(video_path),
+        _ => ts_index::index_file(video_path),
+    };
+    let index = match result {
         Ok(i) => i,
         Err(e) => {
             eprintln!("vidéo : {e}");
             std::process::exit(1);
         }
     };
-    println!("== Vidéo ({:?} d'analyse)", t.elapsed());
+    println!("== Vidéo (analyse {mode} : {:?})", t.elapsed());
     println!("  taille       : {:.1} Mo", index.file_size as f64 / 1e6);
     println!("  durée        : {:.3} s", index.duration);
     println!("  1er PTS brut : {:.3} s", index.first_pts);

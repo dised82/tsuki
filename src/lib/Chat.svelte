@@ -197,7 +197,12 @@
   }
   h2 { flex: 1; margin: 0; text-align: center; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
 
-  .list { flex: 1; overflow-y: auto; padding: 8px 0 16px; font-size: var(--chat-font); line-height: 1.6; overflow-wrap: anywhere; }
+  /* Comme sur Twitch : les messages arrivent par le bas et poussent les anciens vers le haut. */
+  .list {
+    flex: 1; overflow-y: auto; padding: 8px 0 16px; font-size: var(--chat-font); line-height: 1.6; overflow-wrap: anywhere;
+    display: flex; flex-direction: column;
+  }
+  .list > :first-child { margin-top: auto; }
   .welcome { color: var(--text-faint); padding: 0 16px; font-size: 13px; }
   .msg { padding: 3px 16px; }
   .msg:hover { background: rgba(255, 255, 255, 0.04); }

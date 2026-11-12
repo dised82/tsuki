@@ -136,10 +136,150 @@ struct Parser {
     id3_state: u8, // 0 = pas commencé, 1 = en cours, 2 = terminé
 }
 
+/// Au-delà de cette taille, on n'analyse que des extraits du fichier (voir `index_sparse`).
+const SPARSE_THRESHOLD: u64 = 400 << 20;
+/// Durée visée des morceaux en analyse par extraits (moins de lectures).
+const SPARSE_SEGMENT_SECS: f64 = 20.0;
+/// Quantité lue au début et à la fin du fichier.
+const EDGE_BYTES: u64 = 6 << 20;
+/// Lecture maximale pour trouver une image clé à partir d'une position estimée.
+const PROBE_BYTES: u64 = 12 << 20;
+
+/// Construit la table de navigation. Les petits fichiers sont lus en entier ; les gros
+/// ne sont lus que par extraits (≈ 5 % du fichier), avec repli sur la lecture complète
+/// si la vidéo présente une anomalie.
 pub fn index_file(path: &Path) -> Result<TsIndex, TsError> {
+    let size = std::fs::metadata(path)?.len();
+    if size > SPARSE_THRESHOLD {
+        if let Ok(idx) = index_sparse(path) {
+            return Ok(idx);
+        }
+    }
+    index_file_full(path)
+}
+
+/// Lecture complète du fichier (référence, toujours exacte).
+pub fn index_file_full(path: &Path) -> Result<TsIndex, TsError> {
     let file = File::open(path)?;
     let file_size = file.metadata()?.len();
     index_reader(BufReader::with_capacity(1 << 20, file), file_size)
+}
+
+/// Analyse par extraits : début et fin du fichier, puis, toutes les ~20 s, un saut à la
+/// position estimée (débit moyen) suivi de la lecture jusqu'à la prochaine image clé.
+pub fn index_sparse(path: &Path) -> Result<TsIndex, TsError> {
+    const WRAP: u64 = 1 << 33;
+    let mut f = File::open(path)?;
+    let size = f.metadata()?.len();
+
+    // 1. Début : pistes, premier horodatage, étiquettes ID3, durée d'une image.
+    let mut head = Parser::default();
+    scan_window(&mut f, 0, EDGE_BYTES.min(size), &mut head, |_| false)?;
+    head.finish_pes();
+    if !head.streams.iter().any(|(_, k)| *k == Kind::Video) {
+        return Err(TsError::NoVideo);
+    }
+    let first_pts = head.first_pts.ok_or(TsError::NoKeyframe)?;
+    let frame = if head.frames > 1 { (head.max_pts - first_pts) / (head.frames - 1) } else { 0 };
+
+    // 2. Fin : dernier horodatage, donc la durée.
+    let mut tail = head.fork();
+    let tail_start = size.saturating_sub(EDGE_BYTES);
+    scan_window(&mut f, tail_start, size - tail_start, &mut tail, |_| false)?;
+    tail.finish_pes();
+    let mut end = tail.max_pts + frame;
+    while end < first_pts {
+        end += WRAP;
+    }
+    let total = (end - first_pts) as f64 / CLOCK;
+    if total <= 0.0 {
+        return Err(TsError::NoKeyframe);
+    }
+
+    // 3. Points de découpe.
+    let step = (SPARSE_SEGMENT_SECS * CLOCK) as u64;
+    let mut cuts: Vec<(u64, u64)> = vec![(0, first_pts)];
+    let (mut last_off, mut last_pts) = (0u64, first_pts);
+    let mut rate = size as f64 / total; // octets par seconde, affiné au fil de l'eau
+    loop {
+        let target = last_pts + step;
+        if target + 5 * CLOCK as u64 >= end {
+            break;
+        }
+        let est = last_off + ((target - last_pts) as f64 / CLOCK * rate) as u64;
+        let est = (est / PACKET as u64) * PACKET as u64;
+        if est <= last_off || est >= size {
+            break;
+        }
+        let mut p = head.fork();
+        scan_window(&mut f, est, PROBE_BYTES.min(size - est), &mut p, |p| !p.keyframes.is_empty())?;
+        p.finish_pes();
+        let Some(kf) = p.keyframes.first() else { break };
+        let mut pts = kf.pts;
+        while pts + WRAP / 2 < last_pts {
+            pts += WRAP;
+        }
+        // Horodatages incohérents (trou, discontinuité) : on abandonne pour la lecture complète.
+        if kf.boundary <= last_off || pts <= last_pts || pts > last_pts + 6 * step || pts > end {
+            return Err(TsError::NoKeyframe);
+        }
+        cuts.push((kf.boundary, pts));
+        last_off = kf.boundary;
+        last_pts = pts;
+        rate = last_off as f64 / ((last_pts - first_pts) as f64 / CLOCK);
+    }
+
+    Ok(TsIndex {
+        file_size: size,
+        duration: total,
+        first_pts: first_pts as f64 / CLOCK,
+        keyframes: cuts.len(),
+        has_audio: head.streams.iter().any(|(_, k)| *k == Kind::Audio),
+        segments: segments_from_cuts(&cuts, first_pts, end, size),
+        id3: parse_id3(&head.id3_buf),
+    })
+}
+
+/// Lit `len` octets à partir de `start` et les donne au parseur, paquet par paquet,
+/// en se recalant sur l'octet de synchronisation. S'arrête dès que `stop` est vrai.
+fn scan_window(
+    f: &mut File,
+    start: u64,
+    len: u64,
+    p: &mut Parser,
+    stop: impl Fn(&Parser) -> bool,
+) -> io::Result<()> {
+    use std::io::{Seek, SeekFrom};
+    const CHUNK: usize = 256 * 1024;
+    f.seek(SeekFrom::Start(start))?;
+    let mut src = f.take(len);
+    let mut data: Vec<u8> = Vec::with_capacity(CHUNK + PACKET * 3);
+    let mut base = start; // position dans le fichier de data[0]
+    let mut chunk = vec![0u8; CHUNK];
+    loop {
+        let n = read_full(&mut src, &mut chunk)?;
+        data.extend_from_slice(&chunk[..n]);
+        let mut pos = 0;
+        while pos + PACKET <= data.len() {
+            let aligned = data[pos] == SYNC
+                && (pos + PACKET >= data.len() || data[pos + PACKET] == SYNC);
+            if !aligned {
+                pos += 1;
+                continue;
+            }
+            let pkt: &[u8; PACKET] = data[pos..pos + PACKET].try_into().unwrap();
+            p.packet(pkt, base + pos as u64);
+            pos += PACKET;
+            if stop(p) {
+                return Ok(());
+            }
+        }
+        data.drain(..pos);
+        base += pos as u64;
+        if n < CHUNK {
+            return Ok(());
+        }
+    }
 }
 
 pub fn index_reader<R: Read>(mut reader: R, file_size: u64) -> Result<TsIndex, TsError> {
@@ -235,6 +375,11 @@ fn resync<R: Read>(r: &mut R, pkt: &mut [u8; PACKET]) -> io::Result<u64> {
 }
 
 impl Parser {
+    /// Nouveau parseur qui connaît déjà les pistes (pour lire un extrait du fichier).
+    fn fork(&self) -> Parser {
+        Parser { pmt_pid: self.pmt_pid, streams: self.streams.clone(), ..Parser::default() }
+    }
+
     fn kind(&self, pid: u16) -> Option<Kind> {
         self.streams.iter().find(|(p, _)| *p == pid).map(|(_, k)| *k)
     }
@@ -441,6 +586,10 @@ fn build_segments(kfs: &[Keyframe], first_pts: u64, end_pts: u64, file_size: u64
             _ => {}
         }
     }
+    segments_from_cuts(&cuts, first_pts, end_pts, file_size)
+}
+
+fn segments_from_cuts(cuts: &[(u64, u64)], first_pts: u64, end_pts: u64, file_size: u64) -> Vec<Segment> {
     cuts.iter()
         .enumerate()
         .map(|(i, &(off, pts))| {
