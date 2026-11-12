@@ -6,6 +6,7 @@
   import Player from "./lib/Player.svelte";
   import Chat from "./lib/Chat.svelte";
   import Library from "./lib/Library.svelte";
+  import Shortcuts from "./lib/Shortcuts.svelte";
   import {
     libraryAdd, libraryList, libraryRelocate, libraryRemove, loadChat, log, openEntry, openVideo,
     saveThumbnail, scanFolder, setProgress, startupFiles,
@@ -201,8 +202,16 @@
     }
   }
 
+  let helpOpen = $state(false);
+
   function onKey(e: KeyboardEvent) {
-    if (e.key === "Escape" && fullscreen) {
+    const typing = (e.target as HTMLElement).closest("input, textarea, [contenteditable]");
+    if (e.key === "?" && !typing && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      helpOpen = !helpOpen;
+      return;
+    }
+    if (e.key === "Escape" && fullscreen && !helpOpen) {
       e.preventDefault();
       toggleFullscreen();
     }
@@ -266,6 +275,9 @@
         </button>
       {/if}
       <span class="spacer"></span>
+      <button class="icon-btn" onclick={() => (helpOpen = true)} title="Raccourcis clavier (?)" aria-label="Raccourcis clavier">
+        <svg viewBox="0 0 20 20" width="18" height="18"><path fill="currentColor" d="M2 5h16v10H2zm2 2v2h2V7zm3 0v2h2V7zm3 0v2h2V7zm3 0v2h3V7zM4 10v2h2v-2zm3 0v2h6v-2zm7 0v2h2v-2z" /></svg>
+      </button>
       <button class="btn" onclick={pickVideos} disabled={!!busy} title="Choisir une ou plusieurs vidéos à ajouter à la liste">
         <svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M9 4h2v5h5v2h-5v5H9v-5H4V9h5z" /></svg>
         Ajouter
@@ -340,6 +352,10 @@
       />
     {/if}
   </main>
+
+  {#if helpOpen}
+    <Shortcuts onClose={() => (helpOpen = false)} />
+  {/if}
 
   {#if dragging}
     <div class="drop">

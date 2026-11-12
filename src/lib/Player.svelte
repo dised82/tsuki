@@ -137,6 +137,12 @@
     el.muted = m;
     store("muted", m);
   }
+  function stepRate(dir: number) {
+    const i = SPEEDS.indexOf(rate);
+    const next = SPEEDS[Math.min(SPEEDS.length - 1, Math.max(0, (i < 0 ? 3 : i) + dir))];
+    setRate(next);
+    show(`Vitesse ×${next}`);
+  }
   function setRate(r: number) {
     rate = r;
     el.playbackRate = r;
@@ -163,7 +169,7 @@
 
   function onKey(e: KeyboardEvent) {
     const t = e.target as HTMLElement;
-    if (t.closest("input, textarea, [contenteditable]")) return;
+    if (t.closest("input, textarea, [contenteditable]") || document.querySelector("[aria-modal=true]")) return;
     const k = e.key.toLowerCase();
     const actions: Record<string, () => void> = {
       " ": toggle, k: toggle,
@@ -172,7 +178,10 @@
       arrowup: () => setVolume(volume + 0.05), arrowdown: () => setVolume(volume - 0.05),
       f: toggleFullscreen, m: () => setMuted(!muted),
       t: () => (theater = !theater), c: () => (chatOpen = !chatOpen),
+      home: () => seek(0), end: () => seek(duration),
+      "<": () => stepRate(-1), ">": () => stepRate(1),
     };
+    for (let d = 0; d <= 9; d++) actions[String(d)] = () => seek((duration * d) / 10);
     const a = actions[k];
     if (!a || e.ctrlKey || e.altKey || e.metaKey) return;
     e.preventDefault();
