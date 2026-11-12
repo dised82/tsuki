@@ -1,0 +1,12 @@
+[package]
+name = "tsuki-core"
+description = "Cœur de Tsuki : analyse des .ts, lecture des chats Xtra, vérification de correspondance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+thiserror = "2"

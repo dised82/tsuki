@@ -1,0 +1,6 @@
+/target
+node_modules/
+dist/
+*.ts.cache
+dist-linux/
+/src-tauri/gen/schemas/

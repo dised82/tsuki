@@ -1,0 +1,19 @@
+# Paquet Arch de Tsuki, construit à partir du .deb produit par Tauri.
+pkgname=tsuki
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Lecteur hors ligne des VODs Twitch téléchargées avec Xtra"
+arch=('x86_64')
+license=('MIT')
+depends=('webkit2gtk-4.1' 'gtk3' 'gst-plugins-base' 'gst-plugins-good' 'gst-plugins-bad' 'gst-libav')
+optdepends=('noto-fonts-emoji: emojis dans le chat')
+source=("tsuki.deb")
+noextract=("tsuki.deb")
+sha256sums=('SKIP')
+options=('!strip' '!debug')
+
+package() {
+  cd "$srcdir"
+  # Le .deb est une archive « ar » contenant data.tar.(gz|xz|zst) : on en extrait l'arborescence /usr.
+  bsdtar -xOf tsuki.deb 'data.tar*' | bsdtar -xf - -C "$pkgdir"
+}

@@ -1,0 +1,25 @@
+Tsuki — lecteur hors ligne des VODs Twitch téléchargées avec Xtra
+=================================================================
+
+INSTALLATION
+  Ouvre un terminal dans ce dossier, puis :
+
+      ./install.sh
+
+  Le script détecte ta distribution et installe le bon paquet, avec ses
+  dépendances (modules vidéo GStreamer compris) :
+
+      Arch, Manjaro, EndeavourOS…    paquet .pkg.tar.zst  (pacman)
+      Debian, Ubuntu, Mint, Pop!_OS…  paquet .deb          (apt)
+      Fedora                          paquet .rpm          (dnf)
+      openSUSE                        paquet .rpm          (zypper)
+      autre                           AppImage dans ton dossier personnel
+
+OPTIONS
+      ./install.sh --dry-run     montre ce qui serait fait, sans rien installer
+      ./install.sh --appimage    installe l'AppImage sans droits administrateur
+      ./install.sh --yes         sans questions
+      ./install.sh --uninstall   désinstalle Tsuki
+
+VÉRIFIER L'ARCHIVE
+      sha256sum -c SHA256SUMS

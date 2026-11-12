@@ -1,0 +1,74 @@
+:root {
+  /* Fond et surfaces (thème sombre façon Twitch) */
+  --bg: #0e0e10;
+  --bg-alt: #18181b;
+  --bg-elev: #1f1f23;
+  --bg-hover: #26262c;
+  --border: #2f2f35;
+  --text: #efeff1;
+  --text-dim: #adadb8;
+  --text-faint: #7a7a85;
+  /* Couleur de Tsuki : violet lunaire */
+  --accent: #8f7dff;
+  --accent-hover: #a596ff;
+  --accent-soft: rgba(143, 125, 255, 0.16);
+  --danger: #ff5c5c;
+  --danger-soft: rgba(255, 92, 92, 0.12);
+  --topbar: 50px;
+  --chat-width: 340px;
+  --radius: 6px;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, "Roobert", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+#app { height: 100%; }
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  height: 32px;
+  border-radius: var(--radius);
+  font-weight: 600;
+  background: var(--bg-hover);
+  transition: background 0.12s;
+}
+.btn:hover { background: #303038; }
+.btn.primary { background: var(--accent); color: #0e0e10; }
+.btn.primary:hover { background: var(--accent-hover); }
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius);
+  color: var(--text);
+}
+.icon-btn:hover { background: rgba(255, 255, 255, 0.12); }
+.icon-btn svg { width: 20px; height: 20px; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #3a3a42; border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
