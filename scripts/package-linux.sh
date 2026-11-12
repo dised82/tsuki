@@ -21,10 +21,12 @@ if [ "${1:-}" != "--no-build" ]; then
   npm run tauri build
 fi
 
-DEB="$(ls "$BUNDLE"/deb/*.deb 2>/dev/null | head -1 || true)"
-RPM="$(ls "$BUNDLE"/rpm/*.rpm 2>/dev/null | head -1 || true)"
-APPIMAGE="$(ls "$BUNDLE"/appimage/*.AppImage 2>/dev/null | head -1 || true)"
-[ -n "$DEB" ] || { echo "Paquet .deb introuvable dans $BUNDLE/deb" >&2; exit 1; }
+# Uniquement les paquets de CETTE version (d'anciens peuvent traîner dans target/).
+pick() { ls "$BUNDLE"/$1 2>/dev/null | head -1 || true; }
+DEB="$(pick "deb/*_${VERSION}_*.deb")"
+RPM="$(pick "rpm/*-${VERSION}-*.rpm")"
+APPIMAGE="$(pick "appimage/*_${VERSION}_*.AppImage")"
+[ -n "$DEB" ] || { echo "Paquet .deb $VERSION introuvable dans $BUNDLE/deb" >&2; exit 1; }
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
