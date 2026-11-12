@@ -2,53 +2,136 @@
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import Player from "./lib/Player.svelte";
   import Chat from "./lib/Chat.svelte";
-  import { loadChat, log, openVideo, startupFile, type ChatPayload, type ChatRefusal, type VideoInfo } from "./lib/api";
+  import Library from "./lib/Library.svelte";
+  import {
+    libraryAdd, libraryList, libraryRelocate, libraryRemove, loadChat, log, openEntry, openVideo,
+    saveThumbnail, setProgress, startupFiles,
+    type ChatPayload, type ChatRefusal, type LibraryItem, type VideoInfo,
+  } from "./lib/api";
   import { clock, longDate } from "./lib/format";
 
+  // --- Bibliothèque -------------------------------------------------------
+  let items = $state<LibraryItem[]>([]);
+  let busy = $state<string | null>(null);
+  let addErrors = $state<{ path: string; message: string }[]>([]);
+
+  async function refresh() {
+    try {
+      items = await libraryList();
+    } catch (e) {
+      log(`bibliothèque : ${e}`);
+    }
+  }
+
+  /** Ajoute plusieurs vidéos à la liste, sans les lire. */
+  async function addPaths(paths: string[]) {
+    const ts = paths.filter((p) => p.toLowerCase().endsWith(".ts"));
+    if (ts.length === 0) return;
+    busy = ts.length > 1 ? `Analyse de ${ts.length} vidéos…` : "Analyse de la vidéo…";
+    try {
+      const r = await libraryAdd(ts);
+      addErrors = r.errors;
+    } catch (e) {
+      addErrors = [{ path: ts.join(", "), message: String(e) }];
+    } finally {
+      busy = null;
+      refresh();
+    }
+  }
+
+  async function pickVideos() {
+    const r = await open({ multiple: true, filters: [{ name: "Vidéos Xtra (.ts)", extensions: ["ts"] }] });
+    if (r) addPaths(Array.isArray(r) ? r : [r]);
+  }
+
+  async function relocate(item: LibraryItem) {
+    const path = await open({
+      multiple: false,
+      title: `Où se trouve « ${item.title || item.fileName} » ?`,
+      filters: [{ name: "Vidéo Xtra (.ts)", extensions: ["ts"] }],
+    });
+    if (typeof path !== "string") return;
+    busy = "Vérification du fichier…";
+    try {
+      await libraryRelocate(item.id, path);
+      addErrors = [];
+    } catch (e) {
+      addErrors = [{ path, message: String(e) }];
+    } finally {
+      busy = null;
+      refresh();
+    }
+  }
+
+  async function remove(item: LibraryItem) {
+    await libraryRemove(item.id).catch((e) => log(`retrait : ${e}`));
+    refresh();
+  }
+
+  // --- Lecture ------------------------------------------------------------
   let video = $state<VideoInfo | null>(null);
   let chat = $state<ChatPayload | null>(null);
   let refusal = $state<ChatRefusal | null>(null);
-  let opening = $state(false);
   let chatLoading = $state(false);
   let openError = $state<string | null>(null);
   let currentTime = $state(0);
+  let startAt = $state(0);
   let theater = $state(false);
+  let fullscreen = $state(false);
+  /** Mode cinéma ou plein écran : pas de barre du haut ni d'informations sous la vidéo. */
+  let immersive = $derived(!!video && (theater || fullscreen));
   let chatOpen = $state(true);
   let offset = $state(0);
   let dragging = $state(false);
   let playerKey = $state(0);
-  let player: Player | undefined = $state();
 
   /** Moment courant dans la VOD, vu par le chat (décalage appliqué). */
   let vodTime = $derived((chat?.startTime ?? 0) + currentTime - offset);
 
-  async function openPath(path: string) {
-    opening = true;
-    openError = null;
-    try {
-      const v = await openVideo(path);
-      video = v;
-      chat = null;
-      refusal = null;
-      currentTime = 0;
-      offset = 0;
-      playerKey++;
-      if (v.chat?.status === "loaded") chat = v.chat;
-      else if (v.chat?.status === "refused") refusal = v.chat;
-      log(`vidéo ouverte : ${v.fileName} (${v.duration.toFixed(1)} s), chat : ${v.chat?.status ?? "aucun"}`);
-    } catch (e) {
-      openError = String(e);
-      log(`ouverture impossible : ${e}`);
-    } finally {
-      opening = false;
-    }
+  function show(v: VideoInfo) {
+    const e = v.entry;
+    // Reprise, sauf si la vidéo était presque finie.
+    startAt = e.position > 5 && e.position < v.duration - 15 ? e.position : 0;
+    video = v;
+    chat = v.chat?.status === "loaded" ? v.chat : null;
+    refusal = v.chat?.status === "refused" ? v.chat : null;
+    currentTime = startAt;
+    offset = 0;
+    playerKey++;
+    log(`vidéo ouverte : ${v.fileName} (${v.duration.toFixed(1)} s), chat : ${v.chat?.status ?? "aucun"}`);
   }
 
-  async function pickVideo() {
+  async function play(open: () => Promise<VideoInfo>) {
+    openError = null;
+    busy = "Ouverture de la vidéo…";
+    try {
+      show(await open());
+    } catch (e) {
+      openError = String(e);
+      addErrors = [{ path: "", message: String(e) }];
+      log(`ouverture impossible : ${e}`);
+    } finally {
+      busy = null;
+    }
+  }
+  const playPath = (path: string) => play(() => openVideo(path));
+  const playItem = (item: LibraryItem) => play(() => openEntry(item.id));
+
+  async function pickAndPlay() {
     const path = await open({ multiple: false, filters: [{ name: "Vidéo Xtra (.ts)", extensions: ["ts"] }] });
-    if (typeof path === "string") openPath(path);
+    if (typeof path === "string") playPath(path);
+  }
+
+  async function backToLibrary() {
+    if (fullscreen) await toggleFullscreen();
+    theater = false;
+    video = null; // le lecteur enregistre sa position en se fermant
+    chat = null;
+    refusal = null;
+    setTimeout(refresh, 250);
   }
 
   async function chatFromPath(path: string) {
@@ -56,7 +139,6 @@
     chatLoading = true;
     try {
       const r = await loadChat(video.id, path);
-      // Refusé : on garde le chat actuel s'il y en a un, et on affiche l'erreur.
       if (r.status === "loaded") {
         chat = r;
         refusal = null;
@@ -78,13 +160,46 @@
 
   function seekVod(t: number) {
     if (!chat) return;
-    const target = t - chat.startTime + offset;
     const el = document.querySelector("video");
-    if (el) el.currentTime = Math.max(0, target);
+    if (el) el.currentTime = Math.max(0, t - chat.startTime + offset);
+  }
+
+  /** Plein écran de la fenêtre entière, via Tauri (le chat et les commandes restent en place). */
+  async function toggleFullscreen() {
+    const next = !fullscreen;
+    try {
+      await getCurrentWindow().setFullscreen(next);
+      fullscreen = next;
+    } catch (e) {
+      log(`plein écran : ${e}`);
+    }
+  }
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key === "Escape" && fullscreen) {
+      e.preventDefault();
+      toggleFullscreen();
+    }
+  }
+
+  function onProgress(t: number) {
+    if (!video) return;
+    video.entry.position = t;
+    setProgress(video.entry.id, t);
+  }
+
+  function onThumbnail(data: string) {
+    if (!video) return;
+    video.entry.hasThumbnail = true;
+    saveThumbnail(video.entry.id, data);
   }
 
   onMount(() => {
-    startupFile().then((p) => { if (p) openPath(p); });
+    refresh();
+    startupFiles().then((files) => {
+      if (files.length === 1) playPath(files[0]);
+      else if (files.length > 1) addPaths(files);
+    });
     let unlisten: (() => void) | undefined;
     getCurrentWebview()
       .onDragDropEvent((e) => {
@@ -93,9 +208,11 @@
         else if (p.type === "leave") dragging = false;
         else if (p.type === "drop") {
           dragging = false;
-          const ts = p.paths.find((x) => x.toLowerCase().endsWith(".ts"));
+          const ts = p.paths.filter((x) => x.toLowerCase().endsWith(".ts"));
           const json = p.paths.find((x) => x.toLowerCase().endsWith(".json"));
-          if (ts) openPath(ts);
+          // Une vidéo : on la lit. Plusieurs : on les ajoute à la liste.
+          if (ts.length === 1) playPath(ts[0]);
+          else if (ts.length > 1) addPaths(ts);
           else if (json && video) chatFromPath(json);
         }
       })
@@ -107,15 +224,27 @@
   let channel = $derived(meta?.channelName || meta?.channelLogin || "");
 </script>
 
-<div class="app" class:theater>
-  {#if !theater}
+<svelte:window onkeydown={onKey} />
+
+<div class="app" class:immersive>
+  {#if !immersive}
     <header class="topbar">
-      <div class="brand">
+      <button class="brand" onclick={backToLibrary} title="Bibliothèque">
         <img src="/icon.png" alt="" />
         <span>Tsuki</span>
-      </div>
+      </button>
+      {#if video}
+        <button class="btn ghost" onclick={backToLibrary}>
+          <svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M12.5 4 14 5.5 9.5 10l4.5 4.5-1.5 1.5-6-6z" /></svg>
+          Bibliothèque
+        </button>
+      {/if}
       <span class="spacer"></span>
-      <button class="btn" onclick={pickVideo} disabled={opening}>
+      <button class="btn" onclick={pickVideos} disabled={!!busy} title="Choisir une ou plusieurs vidéos à ajouter à la liste">
+        <svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M9 4h2v5h5v2h-5v5H9v-5H4V9h5z" /></svg>
+        Ajouter
+      </button>
+      <button class="btn primary" onclick={pickAndPlay} disabled={!!busy}>
         <svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M2 4h6l2 2h8v10H2zm2 4v6h12V8z" /></svg>
         Ouvrir une vidéo
       </button>
@@ -126,9 +255,14 @@
     {#if video}
       <section class="player-col">
         {#key playerKey}
-          <Player bind:this={player} {video} {chat} bind:currentTime bind:theater bind:chatOpen />
+          <Player
+            {video} {chat} {fullscreen} {startAt} bind:currentTime bind:theater bind:chatOpen
+            title={meta?.title ?? video.fileName} {channel}
+            needThumbnail={!video.entry.hasThumbnail}
+            {onProgress} {onThumbnail} onToggleFullscreen={toggleFullscreen}
+          />
         {/key}
-        {#if !theater}
+        {#if !immersive}
           <div class="info">
             <div class="avatar" aria-hidden="true">{(channel || video.fileName)[0]?.toUpperCase()}</div>
             <div class="details">
@@ -167,37 +301,46 @@
         />
       {/if}
     {:else}
-      <div class="home">
-        <img class="moon" src="/icon.png" alt="" />
-        <h1>Aucune rediffusion pour l'instant</h1>
-        <p>Ouvre une vidéo <code>.ts</code> téléchargée avec Xtra, ou glisse-la dans cette fenêtre.<br />
-          Son chat <code>_chat.json</code> sera chargé automatiquement s'il est dans le même dossier.</p>
-        <button class="btn primary" onclick={pickVideo} disabled={opening}>
-          {opening ? "Analyse de la vidéo…" : "Ouvrir une vidéo"}
-        </button>
-        {#if openError}<p class="error" role="alert">{openError}</p>{/if}
-      </div>
+      <Library
+        {items}
+        {busy}
+        errors={addErrors}
+        onOpen={playItem}
+        onAdd={pickVideos}
+        onRemove={remove}
+        onRelocate={relocate}
+        onDismissErrors={() => (addErrors = [])}
+      />
     {/if}
   </main>
 
   {#if dragging}
-    <div class="drop">Dépose une vidéo <code>.ts</code>{video ? " ou un chat .json" : ""}</div>
+    <div class="drop">
+      Dépose une ou plusieurs vidéos <code>.ts</code>{video ? ", ou un chat .json" : ""}
+    </div>
+  {/if}
+  {#if openError && video}
+    <div class="toast" role="alert">{openError}</div>
   {/if}
 </div>
 
 <style>
   .app { display: flex; flex-direction: column; height: 100%; }
   .topbar {
-    display: flex; align-items: center; gap: 12px; height: var(--topbar); padding: 0 12px; flex-shrink: 0;
+    display: flex; align-items: center; gap: 10px; height: var(--topbar); padding: 0 12px; flex-shrink: 0;
     background: var(--bg-alt); border-bottom: 1px solid var(--border); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4); z-index: 2;
   }
-  .brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 17px; letter-spacing: 0.01em; }
-  .brand img { width: 28px; height: 28px; }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 17px; letter-spacing: 0.01em; padding: 4px 6px; border-radius: var(--radius); }
+  .brand:hover { background: var(--bg-hover); }
+  .brand img { width: 30px; height: 30px; border-radius: 7px; }
+  .btn.ghost { background: none; color: var(--text-dim); }
+  .btn.ghost:hover { background: var(--bg-hover); color: var(--text); }
   .spacer { flex: 1; }
 
   main { flex: 1; display: flex; min-height: 0; }
+  main > :global(.library) { flex: 1; }
   .player-col { flex: 1; min-width: 0; overflow-y: auto; container-type: inline-size; }
-  .theater .player-col { overflow: hidden; }
+  .immersive .player-col { overflow: hidden; display: flex; flex-direction: column; }
 
   .info { display: flex; gap: 14px; padding: 16px 20px 24px; }
   .avatar {
@@ -209,16 +352,14 @@
   h1 { margin: 4px 0 8px; font-size: 15px; font-weight: 600; }
   .tags { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--text-dim); font-size: 13px; }
   .game { color: var(--accent); font-weight: 600; }
-
-  .home { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; }
-  .home .moon { width: 96px; height: 96px; opacity: 0.9; }
-  .home h1 { font-size: 22px; margin: 8px 0 0; }
-  .home p { color: var(--text-dim); max-width: 460px; line-height: 1.6; margin: 0 0 8px; }
   code { background: var(--bg-hover); padding: 1px 5px; border-radius: 4px; font-size: 0.92em; }
-  .error { color: var(--danger); }
 
   .drop {
     position: fixed; inset: 12px; display: grid; place-items: center; border-radius: 12px; z-index: 50;
     border: 2px dashed var(--accent); background: rgba(14, 14, 16, 0.85); font-size: 18px; font-weight: 700; pointer-events: none;
+  }
+  .toast {
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 40; padding: 10px 16px;
+    border-radius: var(--radius); background: var(--danger-soft); border: 1px solid rgba(255, 92, 92, 0.4);
   }
 </style>

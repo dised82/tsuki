@@ -10,9 +10,24 @@
     currentTime: number;
     theater: boolean;
     chatOpen: boolean;
+    /** Plein écran de toute la fenêtre (géré par App). */
+    fullscreen: boolean;
+    /** Titre et chaîne affichés en surimpression en mode cinéma / plein écran. */
+    title?: string;
+    channel?: string;
+    /** Position de départ (reprise de lecture), en secondes. */
+    startAt: number;
+    /** Faut-il capturer une miniature pour la bibliothèque ? */
+    needThumbnail: boolean;
+    onProgress: (t: number) => void;
+    onThumbnail: (jpegDataUrl: string) => void;
+    onToggleFullscreen: () => void;
   }
-  let { video, chat, currentTime = $bindable(0), theater = $bindable(false), chatOpen = $bindable(true) }: Props =
-    $props();
+  let {
+    video, chat, currentTime = $bindable(0), theater = $bindable(false), chatOpen = $bindable(true),
+    fullscreen, title, channel, startAt, needThumbnail, onProgress, onThumbnail, onToggleFullscreen,
+  }: Props = $props();
+  let immersive = $derived(theater || fullscreen);
 
   let el: HTMLVideoElement;
   let stage: HTMLDivElement;
@@ -24,7 +39,6 @@
   let volume = $state(stored("volume", 1));
   let muted = $state(stored("muted", false));
   let rate = $state(1);
-  let fullscreen = $state(false);
   let controlsVisible = $state(true);
   let menuOpen = $state(false);
   let error = $state<string | null>(null);
@@ -42,7 +56,7 @@
     el.volume = volume;
     el.muted = muted;
     if (Hls.isSupported()) {
-      hls = new Hls({ enableWorker: true, maxBufferLength: 30, backBufferLength: 60, startPosition: 0 });
+      hls = new Hls({ enableWorker: true, maxBufferLength: 30, backBufferLength: 60, startPosition: startAt });
       hls.on(Hls.Events.ERROR, (_e, data) => {
         log(`hls ${data.fatal ? "FATAL" : "avertissement"} : ${data.type} / ${data.details}`);
         if (!data.fatal) return;
@@ -58,21 +72,47 @@
       hls.attachMedia(el);
     } else if (el.canPlayType("application/vnd.apple.mpegurl")) {
       el.src = playlistUrl(video);
+      el.currentTime = startAt;
     } else {
       error = "Ce système ne sait pas lire les vidéos MPEG-TS (Media Source Extensions indisponible).";
     }
     el.play().catch((e) => log(`lecture auto refusée : ${e}`));
+    if (startAt > 0) show(`Reprise à ${clock(startAt)}`, 1800);
+
+    // Position enregistrée toutes les 5 s pendant la lecture (reprise au prochain lancement).
+    const saver = setInterval(() => !el.paused && onProgress(el.currentTime), 5000);
 
     if (import.meta.env.DEV) {
       const t = setInterval(() => {
         log(`diag t=${el.currentTime.toFixed(2)} paused=${el.paused} ready=${el.readyState} ` +
           `size=${el.videoWidth}x${el.videoHeight} buffered=${buffered.toFixed(1)}`);
       }, 2000);
-      return () => clearInterval(t);
+      return () => { clearInterval(t); clearInterval(saver); };
     }
+    return () => clearInterval(saver);
   });
 
-  onDestroy(() => hls?.destroy());
+  onDestroy(() => {
+    if (el) onProgress(el.currentTime);
+    hls?.destroy();
+  });
+
+  /** Capture d'une image de la vidéo pour la miniature de la bibliothèque. */
+  let thumbDone = false;
+  function maybeThumbnail() {
+    if (!needThumbnail || thumbDone || !el.videoWidth) return;
+    if (el.currentTime < Math.min(10, duration * 0.4)) return;
+    thumbDone = true;
+    try {
+      const c = document.createElement("canvas");
+      c.width = 480;
+      c.height = Math.round((480 * el.videoHeight) / el.videoWidth);
+      c.getContext("2d")!.drawImage(el, 0, 0, c.width, c.height);
+      onThumbnail(c.toDataURL("image/jpeg", 0.82));
+    } catch (e) {
+      log(`miniature impossible : ${e}`);
+    }
+  }
 
   // --- Commandes ---------------------------------------------------------
   function toggle() {
@@ -88,7 +128,6 @@
   }
   function setVolume(v: number) {
     volume = Math.min(1, Math.max(0, v));
-    duration = video.duration;
     el.volume = volume;
     if (volume > 0 && muted) setMuted(false);
     store("volume", volume);
@@ -103,14 +142,12 @@
     el.playbackRate = r;
     menuOpen = false;
   }
-  async function toggleFullscreen() {
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else await stage.requestFullscreen().catch((e) => log(`plein écran : ${e}`));
-  }
-  function show(text: string) {
+  // Plein écran de la fenêtre entière (géré par App via Tauri) : le chat reste visible.
+  const toggleFullscreen = () => onToggleFullscreen();
+  function show(text: string, ms = 600) {
     flash = text;
     clearTimeout(flashTimer);
-    flashTimer = setTimeout(() => (flash = null), 600);
+    flashTimer = setTimeout(() => (flash = null), ms);
   }
   let flashTimer: ReturnType<typeof setTimeout>;
 
@@ -187,11 +224,10 @@
 </script>
 
 <svelte:window onkeydown={onKey} />
-<svelte:document onfullscreenchange={() => (fullscreen = !!document.fullscreenElement)} />
 
 <div
   class="stage"
-  class:theater
+  class:immersive
   class:idle={!controlsVisible}
   bind:this={stage}
   onpointermove={wake}
@@ -207,14 +243,22 @@
     ontimeupdate={() => {
       currentTime = el.currentTime;
       buffered = el.buffered.length ? el.buffered.end(el.buffered.length - 1) : 0;
+      maybeThumbnail();
     }}
     onseeking={() => (currentTime = el.currentTime)}
     onplay={() => { paused = false; wake(); }}
-    onpause={() => { paused = true; controlsVisible = true; }}
+    onpause={() => { paused = true; controlsVisible = true; onProgress(el.currentTime); }}
     ondurationchange={() => isFinite(el.duration) && el.duration > 0 && (duration = el.duration)}
     onprogress={() => (buffered = el.buffered.length ? el.buffered.end(el.buffered.length - 1) : 0)}
     onratechange={() => (rate = el.playbackRate)}
   ></video>
+
+  {#if immersive && (title || channel)}
+    <div class="titlebar" class:visible={controlsVisible || paused}>
+      {#if channel}<span class="tb-channel">{channel}</span>{/if}
+      {#if title}<span class="tb-title">{title}</span>{/if}
+    </div>
+  {/if}
 
   {#if error}
     <div class="overlay-msg"><strong>Oups.</strong> {error}</div>
@@ -330,8 +374,15 @@
     background: #000;
     user-select: none;
   }
-  .stage.theater, .stage:fullscreen { height: 100vh; }
-  .stage.theater:not(:fullscreen) { height: 100%; }
+  .stage.immersive { height: 100%; }
+
+  .titlebar {
+    position: absolute; top: 0; left: 0; right: 0; padding: 14px 18px 40px; display: flex; flex-direction: column; gap: 2px;
+    background: linear-gradient(rgba(0, 0, 0, 0.75), transparent); opacity: 0; transition: opacity 0.2s; pointer-events: none;
+  }
+  .titlebar.visible { opacity: 1; }
+  .tb-channel { font-weight: 700; font-size: 16px; }
+  .tb-title { color: #dcdce2; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .stage.idle { cursor: none; }
   video { width: 100%; height: 100%; display: block; object-fit: contain; background: #000; }
 

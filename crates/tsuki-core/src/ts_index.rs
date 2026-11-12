@@ -12,7 +12,7 @@ use std::fs::File;
 use std::io::{self, BufReader, Read};
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const PACKET: usize = 188;
 const SYNC: u8 = 0x47;
@@ -36,7 +36,7 @@ pub enum TsError {
 }
 
 /// Un morceau du fichier servi à hls.js.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Segment {
     pub offset: u64,
     pub len: u64,
@@ -46,7 +46,7 @@ pub struct Segment {
 }
 
 /// Informations lues dans les étiquettes ID3 du premier segment.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Id3Info {
     /// Heure réelle (UTC) du premier segment, ex. `2026-11-06T21:18:20`.
     pub wallclock: Option<String>,
@@ -54,7 +54,7 @@ pub struct Id3Info {
     pub segment_number: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TsIndex {
     pub file_size: u64,
     /// Durée de la vidéo en secondes.

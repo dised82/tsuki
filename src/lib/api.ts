@@ -45,8 +45,38 @@ export interface ChatRefusal {
 
 export type ChatResult = ChatPayload | ChatRefusal;
 
+/** Vidéo de la bibliothèque. */
+export interface Entry {
+  id: string;
+  path: string;
+  chatPath: string | null;
+  fileName: string;
+  size: number;
+  duration: number;
+  title: string | null;
+  channel: string | null;
+  game: string | null;
+  uploadDate: number | null;
+  startTime: number;
+  messageCount: number;
+  addedAt: number;
+  lastOpenedAt: number | null;
+  position: number;
+  hasThumbnail: boolean;
+}
+
+export interface LibraryItem extends Entry {
+  exists: boolean;
+}
+
+export interface AddReport {
+  added: Entry[];
+  errors: { path: string; message: string }[];
+}
+
 export interface VideoInfo {
   id: number;
+  entry: Entry;
   path: string;
   fileName: string;
   duration: number;
@@ -56,11 +86,22 @@ export interface VideoInfo {
 }
 
 export const openVideo = (path: string) => invoke<VideoInfo>("open_video", { path });
+export const openEntry = (id: string) => invoke<VideoInfo>("open_entry", { id });
+export const libraryList = () => invoke<LibraryItem[]>("library_list");
+export const libraryAdd = (paths: string[]) => invoke<AddReport>("library_add", { paths });
+export const libraryRemove = (id: string) => invoke("library_remove", { id });
+export const libraryRelocate = (id: string, path: string) => invoke<Entry>("library_relocate", { id, path });
+export const setProgress = (id: string, position: number) =>
+  invoke("set_progress", { id, position }).catch(() => {});
+export const saveThumbnail = (id: string, data: string) =>
+  invoke("save_thumbnail", { id, data }).catch((e) => log(`miniature : ${e}`));
 export const loadChat = (videoId: number, path: string) =>
   invoke<ChatResult>("load_chat", { videoId, path });
-export const startupFile = () => invoke<string | null>("startup_file");
+export const startupFiles = () => invoke<string[]>("startup_files");
 export const log = (message: string) => invoke("log", { message }).catch(() => {});
 
+/** Miniature ; `v` force le rechargement après une nouvelle capture. */
+export const thumbUrl = (id: string, v = 0) => `${MEDIA}t/${id}?v=${v}`;
 export const playlistUrl = (v: VideoInfo) => `${MEDIA}v/${v.id}/index.m3u8`;
 export const emoteUrl = (videoId: number, gen: number, id: string) =>
   `${MEDIA}e/${videoId}/${gen}/${encodeURIComponent(id)}`;

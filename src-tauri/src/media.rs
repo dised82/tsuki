@@ -6,6 +6,7 @@
 //! | `/v/{vidéo}/{n}.ts`                  | morceau n, lu directement dans le `.ts`  |
 //! | `/e/{vidéo}/{génération}/{emote}`    | image d'emote (décodée du JSON)          |
 //! | `/b/{vidéo}/{génération}/{set}/{v}`  | image de badge                           |
+//! | `/t/{entrée}`                        | miniature d'une vidéo de la bibliothèque |
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -13,6 +14,7 @@ use std::io::{Read, Seek, SeekFrom};
 use tauri::http::{header, Request, Response, StatusCode};
 use tauri::{Manager, UriSchemeContext, UriSchemeResponder};
 
+use crate::library::{safe_id, Library};
 use crate::AppState;
 
 pub fn handle<R: tauri::Runtime>(
@@ -23,7 +25,7 @@ pub fn handle<R: tauri::Runtime>(
     let app = ctx.app_handle().clone();
     // La lecture disque se fait hors du fil principal de l'interface.
     std::thread::spawn(move || {
-        let response = route(app.state::<AppState>().inner(), request.uri().path())
+        let response = route(app.state::<AppState>().inner(), app.state::<Library>().inner(), request.uri().path())
             .unwrap_or_else(|(status, msg)| reply(status, "text/plain; charset=utf-8", msg.into_bytes(), false));
         responder.respond(response);
     });
@@ -31,7 +33,7 @@ pub fn handle<R: tauri::Runtime>(
 
 type Fail = (StatusCode, String);
 
-fn route(state: &AppState, path: &str) -> Result<Response<Vec<u8>>, Fail> {
+fn route(state: &AppState, lib: &Library, path: &str) -> Result<Response<Vec<u8>>, Fail> {
     let parts: Vec<String> = path.trim_start_matches('/').split('/').map(percent_decode).collect();
     let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
     let not_found = || (StatusCode::NOT_FOUND, format!("introuvable : {path}"));
@@ -57,6 +59,10 @@ fn route(state: &AppState, path: &str) -> Result<Response<Vec<u8>>, Fail> {
         ["e", vid, _gen, emote] => image(state, id(vid)?, |c| c.emotes.get(*emote)),
         ["b", vid, _gen, set, version] => {
             image(state, id(vid)?, |c| c.badges.get(&(set.to_string(), version.to_string())))
+        }
+        ["t", entry] => {
+            let bytes = std::fs::read(lib.thumb_path(&safe_id(entry))).map_err(|_| not_found())?;
+            Ok(reply(StatusCode::OK, "image/jpeg", bytes, false))
         }
         _ => Err(not_found()),
     }
