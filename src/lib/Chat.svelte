@@ -85,7 +85,109 @@
   }
 
   const key = (c: Comment, i: number) => start + i;
+
+  // --- Recherche et fiche utilisateur ------------------------------------
+  /** Panneau affiché par-dessus le fil : recherche, ou messages d'un utilisateur. */
+  let panel = $state<null | { kind: "search" } | { kind: "user"; login: string; name: string; color: string | null }>(null);
+  let query = $state("");
+  let searchInput: HTMLInputElement | undefined = $state();
+  const MAX_RESULTS = 500;
+
+  const textOf = (c: Comment) => c.f.map(([t]) => t).join("");
+  const who = (c: Comment) => (c.l || c.n).toLowerCase();
+
+  /** Résultats : `@pseudo` cherche un utilisateur, sinon le texte et les pseudos. */
+  let results = $derived.by(() => {
+    const cs = chat?.comments ?? [];
+    if (panel?.kind === "user") {
+      const login = panel.login;
+      return cs.filter((c) => who(c) === login);
+    }
+    const q = query.trim().toLowerCase();
+    if (q.length < 2) return [];
+    if (q.startsWith("@")) {
+      const u = q.slice(1);
+      return cs.filter((c) => who(c).includes(u) || c.n.toLowerCase().includes(u));
+    }
+    return cs.filter((c) => textOf(c).toLowerCase().includes(q) || c.n.toLowerCase().includes(q));
+  });
+  let shownResults = $derived(results.slice(0, MAX_RESULTS));
+
+  async function openSearch() {
+    panel = { kind: "search" };
+    await tick();
+    searchInput?.focus();
+    searchInput?.select();
+  }
+  function openUser(c: Comment) {
+    panel = { kind: "user", login: who(c), name: c.n, color: c.c };
+  }
+  function closePanel() {
+    panel = null;
+  }
+  function jump(c: Comment) {
+    onSeekVod(c.t);
+    paused = false;
+  }
+
+  /** Découpe un texte autour des occurrences de la recherche, pour les surligner. */
+  function marks(text: string): [string, boolean][] {
+    const q = panel?.kind === "search" ? query.trim().toLowerCase() : "";
+    if (q.length < 2 || q.startsWith("@")) return [[text, false]];
+    const out: [string, boolean][] = [];
+    const low = text.toLowerCase();
+    let i = 0;
+    for (let j = low.indexOf(q); j >= 0; j = low.indexOf(q, i)) {
+      if (j > i) out.push([text.slice(i, j), false]);
+      out.push([text.slice(j, j + q.length), true]);
+      i = j + q.length;
+    }
+    if (i < text.length) out.push([text.slice(i), false]);
+    return out;
+  }
+
+  function onKey(e: KeyboardEvent) {
+    const t = e.target as HTMLElement;
+    if (e.key === "Escape" && panel) {
+      e.preventDefault();
+      e.stopPropagation();
+      closePanel();
+    } else if ((e.key === "/" || (e.ctrlKey && e.key.toLowerCase() === "f")) && chat && !t.closest("input, textarea")) {
+      e.preventDefault();
+      openSearch();
+    }
+  }
+
+  let userStats = $derived.by(() => {
+    if (panel?.kind !== "user" || results.length === 0) return null;
+    const last = results[results.length - 1];
+    return { count: results.length, first: results[0].t, last: last.t, badges: last.b };
+  });
 </script>
+
+<svelte:window onkeydowncapture={onKey} />
+
+{#snippet line(c: Comment, i: number, withTime: boolean, clickable: boolean)}
+  <div class="msg" class:hit={clickable}>
+    {#if withTime}
+      <button class="ts" onclick={() => jump(c)} title="Aller à ce moment">{clock(c.t)}</button>
+    {/if}
+    {#each c.b as [set, ver]}
+      {#if badgeSet.has(`${set}/${ver}`)}
+        <img class="badge" src={badgeUrl(videoId, chat!.generation, set, ver)} alt={set} title={set} />
+      {/if}
+    {/each}
+    <button class="name" style:color={nameColor(c.c, c.l || c.n)} onclick={() => openUser(c)}
+      title="Voir les messages de {c.n}">{c.n}</button><span class="colon">:</span>
+    {#each c.f as [text, emote]}
+      {#if emote && emoteSet.has(emote)}
+        <img class="emote" src={emoteUrl(videoId, chat!.generation, emote)} alt={text} title={text} />
+      {:else}
+        {#each marks(text) as [part, hit]}{#if hit}<mark>{part}</mark>{:else}<span>{part}</span>{/if}{/each}
+      {/if}
+    {/each}
+  </div>
+{/snippet}
 
 <aside class="chat" style:--chat-font="{fontSize}px">
   <header>
@@ -93,6 +195,12 @@
       <svg viewBox="0 0 20 20"><path fill="currentColor" d="M4 4h2v12H4zm4 6 5-5 1.4 1.4L11.8 9H17v2h-5.2l2.6 2.6L13 15z" /></svg>
     </button>
     <h2>Chat de la rediffusion</h2>
+    {#if chat}
+      <button class="icon-btn" class:on={panel?.kind === "search"} onclick={() => (panel?.kind === "search" ? closePanel() : openSearch())}
+        title="Rechercher dans le chat (/)">
+        <svg viewBox="0 0 20 20"><path fill="currentColor" d="M8.5 3a5.5 5.5 0 0 1 4.4 8.8l3.7 3.7-1.4 1.4-3.7-3.7A5.5 5.5 0 1 1 8.5 3m0 2a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7" /></svg>
+      </button>
+    {/if}
     <div class="menu-wrap">
       <button class="icon-btn" onclick={() => (menuOpen = !menuOpen)} title="Options du chat" aria-haspopup="menu">
         <svg viewBox="0 0 20 20"><circle fill="currentColor" cx="10" cy="4" r="1.6" /><circle fill="currentColor" cx="10" cy="10" r="1.6" /><circle fill="currentColor" cx="10" cy="16" r="1.6" /></svg>
@@ -154,26 +262,62 @@
         <p class="welcome">Bienvenue dans le chat ! Les messages apparaîtront au fil de la vidéo.</p>
       {/if}
       {#each visible as c, i (key(c, i))}
-        <div class="msg">
-          {#if showTime}
-            <button class="ts" onclick={() => onSeekVod(c.t)} title="Aller à ce moment">{clock(c.t)}</button>
-          {/if}
-          {#each c.b as [set, ver]}
-            {#if badgeSet.has(`${set}/${ver}`)}
-              <img class="badge" src={badgeUrl(videoId, chat.generation, set, ver)} alt={set} title={set} />
-            {/if}
-          {/each}
-          <span class="name" style:color={nameColor(c.c, c.l || c.n)}>{c.n}</span><span class="colon">:</span>
-          {#each c.f as [text, emote]}
-            {#if emote && emoteSet.has(emote)}
-              <img class="emote" src={emoteUrl(videoId, chat.generation, emote)} alt={text} title={text} />
-            {:else}
-              <span>{text}</span>
-            {/if}
-          {/each}
-        </div>
+        {@render line(c, i, showTime, false)}
       {/each}
     </div>
+
+    {#if panel}
+      <div class="panel">
+        {#if panel.kind === "search"}
+          <div class="panel-head">
+            <input bind:this={searchInput} bind:value={query} type="search" class="search"
+              placeholder="Mot, expression ou @pseudo" aria-label="Rechercher dans le chat" />
+            <button class="icon-btn" onclick={closePanel} aria-label="Fermer la recherche" title="Fermer (Échap)">✕</button>
+          </div>
+          <div class="panel-info">
+            {#if query.trim().length < 2}
+              Tape au moins 2 caractères. Clique sur un résultat pour aller à ce moment de la vidéo.
+            {:else if results.length === 0}
+              Aucun message ne contient « {query.trim()} ».
+            {:else}
+              {results.length.toLocaleString("fr-FR")} message{results.length > 1 ? "s" : ""}
+              {#if results.length > MAX_RESULTS}(les {MAX_RESULTS} premiers affichés){/if}
+            {/if}
+          </div>
+        {:else}
+          <div class="panel-head user">
+            <button class="icon-btn" onclick={closePanel} aria-label="Retour au chat" title="Retour (Échap)">
+              <svg viewBox="0 0 20 20"><path fill="currentColor" d="M12.5 4 14 5.5 9.5 10l4.5 4.5-1.5 1.5-6-6z" /></svg>
+            </button>
+            <div class="avatar" style:background={nameColor(panel.color, panel.login)}>{panel.name[0]?.toUpperCase()}</div>
+            <div class="who">
+              <strong style:color={nameColor(panel.color, panel.login)}>{panel.name}</strong>
+              {#if panel.login && panel.login !== panel.name.toLowerCase()}<span class="login">{panel.login}</span>{/if}
+            </div>
+          </div>
+          {#if userStats}
+            <div class="panel-info">
+              {#each userStats.badges as [set, ver]}
+                {#if badgeSet.has(`${set}/${ver}`)}
+                  <img class="badge" src={badgeUrl(videoId, chat.generation, set, ver)} alt={set} title={set} />
+                {/if}
+              {/each}
+              {userStats.count} message{userStats.count > 1 ? "s" : ""} dans cette vidéo ·
+              de {clock(userStats.first)} à {clock(userStats.last)}
+            </div>
+          {/if}
+        {/if}
+        <div class="results">
+          {#each shownResults as c, i (c)}
+            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+            <div class="result" class:past={c.t <= vodTime} onclick={(e) => !(e.target as HTMLElement).closest("button") && jump(c)}
+              title="Aller à {clock(c.t)}">
+              {@render line(c, i, true, true)}
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
     {#if paused}
       <button class="paused" onclick={resume}>
         {#if pending > 0}
@@ -209,7 +353,35 @@
   .ts { color: var(--text-faint); font-size: 0.85em; margin-right: 4px; font-variant-numeric: tabular-nums; padding: 0; }
   .ts:hover { color: var(--accent); text-decoration: underline; }
   .badge { width: 18px; height: 18px; vertical-align: middle; margin: -2px 3px 0 0; border-radius: 3px; }
-  .name { font-weight: 700; }
+  .name { font-weight: 700; padding: 0; font-size: inherit; line-height: inherit; }
+  .name:hover { text-decoration: underline; }
+  mark { background: rgba(169, 112, 255, 0.45); color: inherit; border-radius: 2px; padding: 0 1px; }
+  .icon-btn.on { background: var(--bg-hover); color: var(--accent); }
+
+  .panel {
+    position: absolute; left: 0; right: 0; top: 50px; bottom: 0; z-index: 5; display: flex; flex-direction: column;
+    background: var(--bg-alt);
+  }
+  .panel-head { display: flex; align-items: center; gap: 8px; padding: 10px 10px 6px; }
+  .panel-head.user { padding: 12px 10px 8px; }
+  .search {
+    flex: 1; height: 34px; padding: 0 10px; border-radius: var(--radius); border: 1px solid var(--border);
+    background: var(--bg-elev); color: var(--text); font: inherit;
+  }
+  .search:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  .avatar {
+    width: 38px; height: 38px; flex-shrink: 0; border-radius: 50%; display: grid; place-items: center;
+    font-weight: 800; color: #0e0e10;
+  }
+  .who { display: flex; flex-direction: column; min-width: 0; }
+  .who strong { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .login { color: var(--text-faint); font-size: 12px; }
+  .panel-info { padding: 2px 16px 8px; color: var(--text-dim); font-size: 12px; border-bottom: 1px solid var(--border); }
+  .results { flex: 1; overflow-y: auto; padding: 4px 0 16px; font-size: var(--chat-font); line-height: 1.6; overflow-wrap: anywhere; }
+  .result { cursor: pointer; }
+  .result:hover { background: rgba(255, 255, 255, 0.05); }
+  .result .msg:hover { background: none; }
+  .result:not(.past) { opacity: 0.75; }
   .colon { margin-right: 4px; }
   .emote { height: 28px; vertical-align: middle; margin: -6px 0 -4px; }
 

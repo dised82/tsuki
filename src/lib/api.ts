@@ -87,6 +87,9 @@ export interface VideoInfo {
 
 export const openVideo = (path: string) => invoke<VideoInfo>("open_video", { path });
 export const openEntry = (id: string) => invoke<VideoInfo>("open_entry", { id });
+export const openQuiet = (id: string) => invoke<VideoInfo>("open_quiet", { id });
+export const closeVideo = (videoId: number) => invoke("close_video", { videoId }).catch(() => {});
+export const scanFolder = (path: string) => invoke<string[]>("scan_folder", { path });
 export const libraryList = () => invoke<LibraryItem[]>("library_list");
 export const libraryAdd = (paths: string[]) => invoke<AddReport>("library_add", { paths });
 export const libraryRemove = (id: string) => invoke("library_remove", { id });

@@ -8,11 +8,12 @@
     errors: { path: string; message: string }[];
     onOpen: (item: LibraryItem) => void;
     onAdd: () => void;
+    onAddFolder: () => void;
     onRemove: (item: LibraryItem) => void;
     onRelocate: (item: LibraryItem) => void;
     onDismissErrors: () => void;
   }
-  let { items, busy, errors, onOpen, onAdd, onRemove, onRelocate, onDismissErrors }: Props = $props();
+  let { items, busy, errors, onOpen, onAdd, onAddFolder, onRemove, onRelocate, onDismissErrors }: Props = $props();
 
   let query = $state("");
   let sort = $state<"recent" | "stream" | "channel">("recent");
@@ -48,6 +49,10 @@
       </select>
     {/if}
     <span class="spacer"></span>
+    <button class="btn" onclick={onAddFolder} disabled={!!busy} title="Ajouter toutes les vidéos d'un dossier et de ses sous-dossiers">
+      <svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M2 4h6l2 2h8v10H2zm2 4v6h12V8z" /></svg>
+      Ajouter un dossier
+    </button>
     <button class="btn primary" onclick={onAdd} disabled={!!busy}>
       <svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M9 4h2v5h5v2h-5v5H9v-5H4V9h5z" /></svg>
       Ajouter des vidéos
@@ -76,7 +81,10 @@
       <p>Ajoute des vidéos <code>.ts</code> téléchargées avec Xtra — tu peux en choisir plusieurs à la fois,
         ou les glisser dans cette fenêtre. Leur chat <code>_chat.json</code> est chargé automatiquement
         s'il est dans le même dossier.</p>
-      <button class="btn primary" onclick={onAdd} disabled={!!busy}>Ajouter des vidéos</button>
+      <div class="actions">
+        <button class="btn primary" onclick={onAdd} disabled={!!busy}>Ajouter des vidéos</button>
+        <button class="btn" onclick={onAddFolder} disabled={!!busy}>Ajouter un dossier</button>
+      </div>
     </div>
   {:else if shown.length === 0}
     <p class="none">Aucune vidéo ne correspond à « {query} ».</p>
@@ -209,5 +217,6 @@
   .empty h2 { margin: 8px 0 0; font-size: 22px; }
   .empty p { color: var(--text-dim); max-width: 520px; line-height: 1.6; margin: 0 0 8px; }
   .none { color: var(--text-dim); }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
   code { background: var(--bg-hover); padding: 1px 5px; border-radius: 4px; font-size: 0.92em; }
 </style>

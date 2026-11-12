@@ -8,10 +8,11 @@
   import Library from "./lib/Library.svelte";
   import {
     libraryAdd, libraryList, libraryRelocate, libraryRemove, loadChat, log, openEntry, openVideo,
-    saveThumbnail, setProgress, startupFiles,
+    saveThumbnail, scanFolder, setProgress, startupFiles,
     type ChatPayload, type ChatRefusal, type LibraryItem, type VideoInfo,
   } from "./lib/api";
   import { clock, longDate } from "./lib/format";
+  import { onThumbnailSaved, queueThumbnails } from "./lib/thumbnails";
 
   // --- Bibliothèque -------------------------------------------------------
   let items = $state<LibraryItem[]>([]);
@@ -21,10 +22,17 @@
   async function refresh() {
     try {
       items = await libraryList();
+      // Miniatures manquantes (vidéos jamais lues), capturées en arrière-plan.
+      queueThumbnails(items.filter((i) => i.exists && !i.hasThumbnail).map((i) => i.id));
     } catch (e) {
       log(`bibliothèque : ${e}`);
     }
   }
+  let thumbRefresh: ReturnType<typeof setTimeout> | undefined;
+  onThumbnailSaved(() => {
+    clearTimeout(thumbRefresh);
+    thumbRefresh = setTimeout(async () => (items = await libraryList().catch(() => items)), 400);
+  });
 
   /** Ajoute plusieurs vidéos à la liste, sans les lire. */
   async function addPaths(paths: string[]) {
@@ -39,6 +47,24 @@
     } finally {
       busy = null;
       refresh();
+    }
+  }
+
+  async function pickFolder() {
+    const dir = await open({ directory: true, multiple: false, title: "Dossier de téléchargements Xtra" });
+    if (typeof dir !== "string") return;
+    busy = "Recherche des vidéos…";
+    try {
+      const found = await scanFolder(dir);
+      if (found.length === 0) {
+        busy = null;
+        addErrors = [{ path: dir, message: "Aucune vidéo .ts dans ce dossier." }];
+        return;
+      }
+      await addPaths(found);
+    } catch (e) {
+      busy = null;
+      addErrors = [{ path: dir, message: String(e) }];
     }
   }
 
@@ -307,6 +333,7 @@
         errors={addErrors}
         onOpen={playItem}
         onAdd={pickVideos}
+        onAddFolder={pickFolder}
         onRemove={remove}
         onRelocate={relocate}
         onDismissErrors={() => (addErrors = [])}

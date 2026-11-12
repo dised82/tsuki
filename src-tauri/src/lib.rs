@@ -149,6 +149,47 @@ async fn library_add(paths: Vec<String>, app: tauri::AppHandle) -> Result<AddRep
     .map_err(|e| e.to_string())
 }
 
+/// Cherche les vidéos `.ts` d'un dossier (et de ses sous-dossiers, jusqu'à 4 niveaux).
+#[tauri::command]
+async fn scan_folder(path: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut found = Vec::new();
+        walk(Path::new(&path), 0, &mut found);
+        found.sort();
+        found
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+fn walk(dir: &Path, depth: usize, out: &mut Vec<String>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        let Ok(ft) = e.file_type() else { continue };
+        if ft.is_dir() {
+            let hidden = p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with('.'));
+            if depth < 4 && !hidden {
+                walk(&p, depth + 1, out);
+            }
+        } else if ft.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("ts")) {
+            out.push(p.display().to_string());
+        }
+    }
+}
+
+/// Ouvre une vidéo sans la marquer comme regardée ni charger son chat (capture de miniature).
+#[tauri::command]
+async fn open_quiet(id: String, app: tauri::AppHandle, state: State<'_, AppState>) -> Result<VideoInfo, String> {
+    open_entry_inner(id, app, state, false).await
+}
+
+/// Libère une vidéo ouverte (après la capture d'une miniature).
+#[tauri::command]
+fn close_video(video_id: u32, state: State<'_, AppState>) {
+    state.videos.lock().unwrap().remove(&video_id);
+}
+
 #[tauri::command]
 fn library_remove(id: String, lib: State<'_, Library>) -> Result<(), String> {
     lib.remove(&id).map_err(|e| e.to_string())
@@ -273,6 +314,15 @@ async fn open_video(path: String, app: tauri::AppHandle, state: State<'_, AppSta
 /// Ouvre une vidéo de la bibliothèque.
 #[tauri::command]
 async fn open_entry(id: String, app: tauri::AppHandle, state: State<'_, AppState>) -> Result<VideoInfo, String> {
+    open_entry_inner(id, app, state, true).await
+}
+
+async fn open_entry_inner(
+    id: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    watch: bool,
+) -> Result<VideoInfo, String> {
     let lib = app.state::<Library>();
     let entry = lib.get(&id).ok_or("Vidéo absente de la bibliothèque.")?;
     let video_path = PathBuf::from(&entry.path);
@@ -297,6 +347,18 @@ async fn open_entry(id: String, app: tauri::AppHandle, state: State<'_, AppState
             entry_id: id.clone(),
         },
     );
+    if !watch {
+        return Ok(VideoInfo {
+            id: vid,
+            path: video_path.display().to_string(),
+            file_name: file_name(&video_path),
+            duration: index.duration,
+            has_audio: index.has_audio,
+            wallclock: index.id3.wallclock.clone(),
+            chat: None,
+            entry,
+        });
+    }
     let entry = lib
         .update(&id, |e| e.last_opened_at = Some(library::now_ms()))
         .map_err(|e| e.to_string())?
@@ -494,6 +556,9 @@ pub fn run() {
             save_thumbnail,
             open_video,
             open_entry,
+            open_quiet,
+            close_video,
+            scan_folder,
             load_chat,
             startup_files,
             log
